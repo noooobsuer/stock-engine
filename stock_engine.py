@@ -40,10 +40,59 @@ def _get_manager():
     global _manager
     if _manager is not None:
         return _manager
-    from data_provider.base import DataFetcherManager
-    from data_provider.yfinance_fetcher import YfinanceFetcher
-    _manager = DataFetcherManager([YfinanceFetcher()])
+    try:
+        from data_provider.base import DataFetcherManager
+        from data_provider.yfinance_fetcher import YfinanceFetcher
+        _manager = DataFetcherManager([YfinanceFetcher()])
+    except ImportError:
+        _manager = _YfinanceFallback()
     return _manager
+
+
+class _YfinanceFallback:
+    import yfinance as _yf
+
+    def get_realtime_quote(self, code):
+        try:
+            tk = self._yf.Ticker(code)
+            info = tk.info if hasattr(tk, 'info') else {}
+            hist = tk.history(period='5d')
+            if hist is None or len(hist) == 0:
+                return None
+            price = float(info.get('currentPrice') or info.get('regularMarketPrice') or hist['Close'].iloc[-1])
+            class _Q: pass
+            q = _Q()
+            q.code = code
+            q.name = info.get('shortName') or info.get('longName') or code
+            q.price = price
+            q.change_pct = float(hist['Close'].pct_change().iloc[-1] * 100) if len(hist) > 1 else 0
+            q.change_amount = float(hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) if len(hist) > 1 else 0
+            q.open_price = float(hist['Open'].iloc[-1]) if 'Open' in hist else price
+            q.high = float(hist['High'].iloc[-1]) if 'High' in hist else price
+            q.low = float(hist['Low'].iloc[-1]) if 'Low' in hist else price
+            q.pre_close = float(hist['Close'].iloc[-2]) if len(hist) > 1 else price
+            q.volume = int(hist['Volume'].iloc[-1]) if 'Volume' in hist else 0
+            q.amplitude = float((q.high - q.low) / q.price * 100)
+            q.total_mv = float(info.get('marketCap', 0) or 0)
+            return q
+        except Exception:
+            return None
+
+    def get_daily_data(self, code, days=60):
+        try:
+            tk = self._yf.Ticker(code)
+            df = tk.history(period='6mo')
+            if df is None or len(df) == 0:
+                return None, 'yfinance'
+            df = df.tail(days).copy()
+            df.index.name = 'date'
+            df = df.reset_index()
+            df.columns = [c.lower().replace(' ', '_') for c in df.columns]
+            if 'close' in df.columns:
+                df['pct_chg'] = df['close'].pct_change() * 100
+            return df, 'yfinance_fallback'
+        except Exception:
+            return None, 'yfinance_fallback'
 
 def _get_trend_analyzer():
     global _analyzer
