@@ -92,6 +92,47 @@ jobs:
           echo "=== JSON结果 ==="
           python minervini_scanner.py --universe nasdaq100 --top 30 --json > minervini_results.json
 
+      - name: 🔗 触发深度分析（取TOP候选股）
+        if: steps.mode.outputs.type == 'minervini'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 从JSON结果中提取评分≥40的前5只股票
+          TOP_STOCKS=$(python3 -c "
+import json
+with open('minervini_results.json') as f:
+    data = json.load(f)
+# 按评分排序，取前5只评分≥40的
+candidates = [s['symbol'] for s in sorted(data, key=lambda x: -x['score']) if s['score'] >= 40][:5]
+print(','.join(candidates) if candidates else 'NONE')
+" 2>/dev/null)
+
+          if [[ "$TOP_STOCKS" == "NONE" || -z "$TOP_STOCKS" ]]; then
+            echo "没有评分≥40的候选股，跳过深度分析"
+            exit 0
+          fi
+
+          echo "TOP候选股: $TOP_STOCKS"
+
+          # 触发分析工作流
+          # 触发分析工作流
+          # 注意: 如果触发失败，需要在 Secrets 中添加 GH_PAT (Personal Access Token)
+          gh workflow run analyze.yml \
+            --repo ${{ github.repository }} \
+            --ref ${{ github.ref_name }} \
+            -f stocks="$TOP_STOCKS" \
+            -f scan_date="$(date -u +%Y-%m-%d)" \
+            2>&1 || echo "GITHUB_TOKEN触发失败，尝试使用 GH_PAT..."
+          if [[ $? -ne 0 && -n "${{ secrets.GH_PAT }}" ]]; then
+            GH_TOKEN=${{ secrets.GH_PAT }} gh workflow run analyze.yml \
+              --repo ${{ github.repository }} \
+              --ref ${{ github.ref_name }} \
+              -f stocks="$TOP_STOCKS" \
+              -f scan_date="$(date -u +%Y-%m-%d)"
+          fi
+
+          echo "✅ 已触发深度分析工作流: $TOP_STOCKS"
+
       - name: 🎯 单股分析
         if: steps.mode.outputs.type == 'single'
         run: |

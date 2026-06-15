@@ -1,0 +1,105 @@
+# ===========================================
+# 研析 深度分析工作流 — 由 scan.yml 触发
+# ===========================================
+# 接收 Minervini 扫描筛选出的候选股列表
+# 对每只股票进行深度趋势分析 + 策略匹配
+# Telegram 推送完整报告
+
+name: 研析深度分析
+
+on:
+  workflow_dispatch:
+    inputs:
+      stocks:
+        description: '股票代码（逗号分隔）'
+        required: true
+        default: 'AAPL,MSFT'
+      scan_date:
+        description: '扫描日期'
+        required: false
+        default: ''
+
+jobs:
+  deep_analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas numpy
+
+      - name: 深度分析候选股
+        id: analysis
+        env:
+          STOCKS: ${{ github.event.inputs.stocks }}
+        run: |
+          IFS=',' read -ra LIST <<< "$STOCKS"
+          REPORT="📊 研析 深度分析报告"
+          REPORT+="%0A%0A"
+          for sym in "${LIST[@]}"; do
+            sym=$(echo "$sym" | xargs)
+            echo "--- 分析: $sym ---"
+            REPORT+="【$sym】%0A"
+
+            # Minervini 扫描
+            MS=$(python minervini_scanner.py --single "$sym" --json 2>/dev/null || echo '{}')
+            SCORE=$(echo "$MS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('score','N/A'))" 2>/dev/null)
+            PASSED=$(echo "$MS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('passed','N/A'))" 2>/dev/null)
+            STAGE=$(echo "$MS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('stage','N/A'))" 2>/dev/null)
+
+            REPORT+="Minervini: ${SCORE}分 通过${PASSED}/7 ${STAGE}%0A"
+
+            # 技术指标
+            TA=$(python stock_engine.py --json --trend "$sym" 2>/dev/null || echo '{}')
+            TREND=$(echo "$TA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('trend_status','N/A'))" 2>/dev/null)
+            RSI=$(echo "$TA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('rsi_6','N/A'))" 2>/dev/null)
+            SIGNAL=$(echo "$TA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('buy_signal','N/A'))" 2>/dev/null)
+            SCORE_TA=$(echo "$TA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('signal_score','N/A'))" 2>/dev/null)
+
+            REPORT+="趋势: ${TREND} | RSI: ${RSI} | 信号: ${SIGNAL} | 评分: ${SCORE_TA}%0A"
+
+            # 策略匹配TOP2
+            EV=$(python stock_engine.py --json --eval-strategies "$sym" 2>/dev/null || echo '[]')
+            STRAT1=$(echo "$EV" | python3 -c "import sys,json; d=json.load(sys.stdin); s=d[0] if d else {}; print(s.get('display_name','') + '(' + str(s.get('score',0)) + '分)' if s else 'N/A')" 2>/dev/null)
+            STRAT2=$(echo "$EV" | python3 -c "import sys,json; d=json.load(sys.stdin); s=d[1] if len(d)>1 else {}; print(s.get('display_name','') + '(' + str(s.get('score',0)) + '分)' if s else '')" 2>/dev/null)
+
+            REPORT+="策略: ${STRAT1}"
+            if [[ -n "$STRAT2" ]]; then
+              REPORT+=" | ${STRAT2}"
+            fi
+            REPORT+="%0A%0A"
+          done
+
+          REPORT+="---%0A🤖 研析数据引擎 | Minervini筛选+深度分析"
+          echo "REPORT=$REPORT" >> $GITHUB_ENV
+
+      - name: 📤 推送到 Telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+            echo "Telegram 未配置，跳过"
+            exit 0
+          fi
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "text=${REPORT}" \
+            -o telegram_response.json
+          if grep -q '"ok":true' telegram_response.json; then
+            echo "✅ Telegram 推送成功"
+          else
+            echo "⚠️ Telegram 推送失败:"
+            cat telegram_response.json
+          fi
