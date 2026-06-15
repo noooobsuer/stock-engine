@@ -1,28 +1,24 @@
 # ===========================================
-# 研析 数据引擎 — 自动扫描工作流
+# 研析 数据引擎 — 自动扫描 + Telegram推送
 # ===========================================
 # 功能:
-#   1. 工作日 → 每日决策仪表盘
-#   2. 每周日 → Minervini 全市场趋势扫描
-#   3. 每次调仓前 → 策略匹配分析
+#   1. 工作日 → 每日决策仪表盘 → Telegram推送
+#   2. 每周日 → Minervini 全市场趋势扫描 → Telegram推送
+#   3. 手动 → 单股深度分析
 #
-# 使用方法:
-#   1. Fork 本仓库
-#   2. 在 Settings → Secrets → Actions 中添加:
-#      - STOCK_LIST: 要跟踪的股票代码(逗号分隔)
-#   3. 启用 Actions
-#
-# 输出:
-#   - 扫描结果保存在 artifacts 中可下载查看
+# 配置 (Settings → Secrets → Actions):
+#   STOCK_LIST         要跟踪的股票(逗号分隔)
+#   TELEGRAM_BOT_TOKEN Telegram Bot Token (@BotFather)
+#   TELEGRAM_CHAT_ID   Telegram 聊天/频道ID
 # ===========================================
 
 name: 研析自动扫描
 
 on:
   schedule:
-    # 工作日 21:00 JST (12:00 UTC) — 美股收盘后
+    # 工作日 21:00 JST (12:00 UTC) — 美股收盘后推送到Telegram
     - cron: '0 12 * * 1-5'
-    # 周日 23:00 JST (14:00 UTC) — 全市场 Minervini 扫描
+    # 周日 23:00 JST (14:00 UTC) — Minervini 全市场扫描
     - cron: '0 14 * * 0'
   workflow_dispatch:
     inputs:
@@ -75,23 +71,26 @@ jobs:
           fi
 
       - name: 📊 每日决策仪表盘
+        id: daily_report
         if: steps.mode.outputs.type == 'daily'
         env:
           CRON_STOCKS: ${{ secrets.STOCK_LIST || 'QQQ,SPY' }}
         run: |
           echo "=== 研析 每日决策仪表盘 ==="
-          python cron_daily_report.py
+          # 生成报告并保存到文件
+          python cron_daily_report.py > daily_report.txt 2>&1
+          cat daily_report.txt
           echo "报告已生成"
 
       - name: 🔍 Minervini 全市场扫描
+        id: minervini_scan
         if: steps.mode.outputs.type == 'minervini'
         run: |
           echo "=== Minervini 美股趋势扫描 ==="
-          python minervini_scanner.py --universe nasdaq100 --top 20
-          echo ""
-          echo "=== 详细JSON结果 ==="
+          python minervini_scanner.py --universe nasdaq100 --top 15 > minervini_report.txt 2>&1
+          cat minervini_report.txt
+          echo "=== JSON结果 ==="
           python minervini_scanner.py --universe nasdaq100 --top 30 --json > minervini_results.json
-          echo "结果已保存到 minervini_results.json"
 
       - name: 🎯 单股分析
         if: steps.mode.outputs.type == 'single'
@@ -101,29 +100,70 @@ jobs:
             echo "请提供股票代码"
             exit 1
           fi
-          echo "=== 分析: $STOCK ==="
-          echo ""
-          echo "【Minervini 扫描】"
-          python minervini_scanner.py --single "$STOCK"
-          echo ""
-          echo "【策略匹配】"
-          python stock_engine.py --eval-strategies "$STOCK"
-          echo ""
-          echo "【技术分析】"
-          python stock_engine.py --trend "$STOCK"
+          {
+            echo "=== 分析: $STOCK ==="
+            echo ""
+            echo "【Minervini 扫描】"
+            python minervini_scanner.py --single "$STOCK"
+            echo ""
+            echo "【策略匹配】"
+            python stock_engine.py --eval-strategies "$STOCK"
+            echo ""
+            echo "【技术分析】"
+            python stock_engine.py --trend "$STOCK"
+          } > single_report.txt
+          cat single_report.txt
+
+      - name: 📤 推送到 Telegram
+        if: always() && (secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '')
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          # 确定要发送的报告文件
+          if [[ -f daily_report.txt ]]; then
+            REPORT_FILE="daily_report.txt"
+            TITLE="📊 研析 每日决策仪表盘"
+          elif [[ -f minervini_report.txt ]]; then
+            REPORT_FILE="minervini_report.txt"
+            TITLE="🔍 Minervini 美股趋势扫描"
+          elif [[ -f single_report.txt ]]; then
+            REPORT_FILE="single_report.txt"
+            TITLE="🎯 单股深度分析"
+          else
+            echo "没有找到报告文件，跳过推送"
+            exit 0
+          fi
+
+          # 读取报告内容（Telegram限制4096字符，截取前4000）
+          CONTENT=$(head -c 4000 "$REPORT_FILE")
+
+          # 组装消息
+          MESSAGE="$TITLE%0A%0A${CONTENT}%0A%0A---%0A🤖 研析数据引擎"
+
+          # 发送到 Telegram
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "text=${MESSAGE}" \
+            -d "parse_mode=Markdown" \
+            -o telegram_response.json
+
+          # 检查结果
+          if grep -q '"ok":true' telegram_response.json; then
+            echo "✅ Telegram 推送成功"
+          else
+            echo "⚠️ Telegram 推送失败:"
+            cat telegram_response.json
+          fi
 
       - name: 保存扫描结果
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: scan-results-${{ github.run_id }}
           path: |
+            *.txt
             minervini_results.json
             logs/
           retention-days: 30
           if-no-files-found: ignore
-
-      - name: 完成通知
-        run: |
-          echo "✅ 研析扫描完成"
-          echo "运行ID: ${{ github.run_id }}"
-          echo "时间: $(date -u)"

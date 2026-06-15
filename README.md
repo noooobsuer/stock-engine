@@ -125,14 +125,22 @@ python trading_plan.py
 #### 配置步骤
 
 1. **Fork 本仓库**
-2. **Settings → Secrets and variables → Actions → New repository secret**
+2. **创建 Telegram Bot**（如果没有）
+
+   打开 [@BotFather](https://t.me/botfather) → 发送 `/newbot` → 获取 Token
+
+   获取 Chat ID: 发消息给机器人后访问 `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
+
+3. **Settings → Secrets and variables → Actions → New repository secret**
    
    | Secret 名称 | 说明 | 必填 |
    |:---|:---|---:|
    | `STOCK_LIST` | 跟踪股票代码，如 `QQQ,SPY,CSCO` | 推荐 |
+   | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token（从 @BotFather 获取） | ✅ |
+   | `TELEGRAM_CHAT_ID` | 接收消息的 Telegram 聊天 ID | ✅ |
 
-3. **Actions 标签 → 启用工作流**
-4. **手动测试**: Actions → `研析自动扫描` → `Run workflow`
+4. **Actions 标签 → 启用工作流**
+5. **手动测试**: Actions → `研析自动扫描` → `Run workflow`
 
 ### 交易纪律
 
