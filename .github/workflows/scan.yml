@@ -113,6 +113,7 @@ print(','.join(candidates) if candidates else 'NONE')
           fi
 
           echo "TOP候选股: $TOP_STOCKS"
+          echo ""
 
           # 触发分析工作流
           # 触发分析工作流
