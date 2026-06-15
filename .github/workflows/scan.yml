@@ -146,11 +146,10 @@ jobs:
           # 组装消息
           MESSAGE="$TITLE%0A%0A${CONTENT}%0A%0A---%0A🤖 研析数据引擎"
 
-          # 发送到 Telegram
+          # 发送到 Telegram（无Markdown解析，避免格式错误）
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             -d "chat_id=${CHAT_ID}" \
             -d "text=${MESSAGE}" \
-            -d "parse_mode=Markdown" \
             -o telegram_response.json
 
           # 检查结果
