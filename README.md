@@ -78,6 +78,70 @@ report = get_daily_report(["BABA","FUTU","MU"])
 **框架类**: hot_theme, event_driven, box_oscillation, growth_quality, expectation_repricing,
         chan_theory, wave_theory, emotion_cycle
 
+## 交易策略 — Minervini 趋势跟踪
+
+内置完整的 **Mark Minervini SEPA 趋势跟踪策略**，自动扫描美股 Stage 2 上升趋势股。
+
+### 策略原理
+
+```
+Minervini 8项条件:
+① RS相对强度 > 70
+② 股价 > MA50 > MA150 > MA200（均线多头）
+③ MA200 持续上升 ≥ 1个月
+④ MA50 在 MA150 和 MA200 上方
+⑤ 股价距52周低点 ≥ 30%
+⑥ 股价在52周高点25%以内
+⑦ Stage 2 上升趋势
+⑧ VCP 形态（加分项）
+```
+
+### 使用方法
+
+```bash
+# 全市场扫描（默认 Nasdaq 100）
+python minervini_scanner.py
+
+# 扫描 S&P 500
+python minervini_scanner.py --universe sp500
+
+# 单股诊断
+python minervini_scanner.py --single AAPL --json
+
+# 查看完整交易计划
+python trading_plan.py
+```
+
+### GitHub Actions 自动扫描
+
+仓库内置了 GitHub Actions 自动扫描工作流。
+
+| 触发方式 | 频率 | 内容 |
+|:---|:---:|:---|
+| 定时（工作日） | 每天 21:00 JST | 持仓+候选池每日报告 |
+| 定时（周日） | 每周 23:00 JST | Minervini 全市场扫描 |
+| 手动触发 | 任意 | 支持单股深度分析 |
+
+#### 配置步骤
+
+1. **Fork 本仓库**
+2. **Settings → Secrets and variables → Actions → New repository secret**
+   
+   | Secret 名称 | 说明 | 必填 |
+   |:---|:---|---:|
+   | `STOCK_LIST` | 跟踪股票代码，如 `QQQ,SPY,CSCO` | 推荐 |
+
+3. **Actions 标签 → 启用工作流**
+4. **手动测试**: Actions → `研析自动扫描` → `Run workflow`
+
+### 交易纪律
+
+```
+✅ 买入条件: Minervini候选 + 缩量回踩MA5/MA10 + MACD多头
+❌ 卖出条件: 跌破止损 / MACD死叉 / 跌破MA20
+⚠️ 绝对禁止: 追高 / 亏损加仓 / 无止损过夜
+```
+
 ## 数据源
 
 - **YFinance** — 美股/港股/日股实时行情、K线、基本面

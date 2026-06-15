@@ -1,0 +1,129 @@
+# ===========================================
+# 研析 数据引擎 — 自动扫描工作流
+# ===========================================
+# 功能:
+#   1. 工作日 → 每日决策仪表盘
+#   2. 每周日 → Minervini 全市场趋势扫描
+#   3. 每次调仓前 → 策略匹配分析
+#
+# 使用方法:
+#   1. Fork 本仓库
+#   2. 在 Settings → Secrets → Actions 中添加:
+#      - STOCK_LIST: 要跟踪的股票代码(逗号分隔)
+#   3. 启用 Actions
+#
+# 输出:
+#   - 扫描结果保存在 artifacts 中可下载查看
+# ===========================================
+
+name: 研析自动扫描
+
+on:
+  schedule:
+    # 工作日 21:00 JST (12:00 UTC) — 美股收盘后
+    - cron: '0 12 * * 1-5'
+    # 周日 23:00 JST (14:00 UTC) — 全市场 Minervini 扫描
+    - cron: '0 14 * * 0'
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: '扫描类型'
+        required: true
+        default: 'daily'
+        type: choice
+        options:
+          - daily
+          - minervini
+          - single
+      stock:
+        description: '单股分析（仅single模式）'
+        required: false
+        default: ''
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas numpy
+
+      - name: 确定扫描模式
+        id: mode
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "type=${{ github.event.inputs.scan_type }}" >> $GITHUB_OUTPUT
+            echo "stock=${{ github.event.inputs.stock }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.schedule }}" == "0 14 * * 0" ]]; then
+            echo "type=minervini" >> $GITHUB_OUTPUT
+            echo "stock=" >> $GITHUB_OUTPUT
+          else
+            echo "type=daily" >> $GITHUB_OUTPUT
+            echo "stock=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 📊 每日决策仪表盘
+        if: steps.mode.outputs.type == 'daily'
+        env:
+          CRON_STOCKS: ${{ secrets.STOCK_LIST || 'QQQ,SPY' }}
+        run: |
+          echo "=== 研析 每日决策仪表盘 ==="
+          python cron_daily_report.py
+          echo "报告已生成"
+
+      - name: 🔍 Minervini 全市场扫描
+        if: steps.mode.outputs.type == 'minervini'
+        run: |
+          echo "=== Minervini 美股趋势扫描 ==="
+          python minervini_scanner.py --universe nasdaq100 --top 20
+          echo ""
+          echo "=== 详细JSON结果 ==="
+          python minervini_scanner.py --universe nasdaq100 --top 30 --json > minervini_results.json
+          echo "结果已保存到 minervini_results.json"
+
+      - name: 🎯 单股分析
+        if: steps.mode.outputs.type == 'single'
+        run: |
+          STOCK="${{ steps.mode.outputs.stock }}"
+          if [[ -z "$STOCK" ]]; then
+            echo "请提供股票代码"
+            exit 1
+          fi
+          echo "=== 分析: $STOCK ==="
+          echo ""
+          echo "【Minervini 扫描】"
+          python minervini_scanner.py --single "$STOCK"
+          echo ""
+          echo "【策略匹配】"
+          python stock_engine.py --eval-strategies "$STOCK"
+          echo ""
+          echo "【技术分析】"
+          python stock_engine.py --trend "$STOCK"
+
+      - name: 保存扫描结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results-${{ github.run_id }}
+          path: |
+            minervini_results.json
+            logs/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: 完成通知
+        run: |
+          echo "✅ 研析扫描完成"
+          echo "运行ID: ${{ github.run_id }}"
+          echo "时间: $(date -u)"
