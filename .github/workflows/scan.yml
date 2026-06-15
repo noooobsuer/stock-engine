@@ -98,14 +98,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # 从JSON结果中提取评分≥40的前5只股票
-          TOP_STOCKS=$(python3 -c "
-import json
-with open('minervini_results.json') as f:
-    data = json.load(f)
-# 按评分排序，取前5只评分≥40的
-candidates = [s['symbol'] for s in sorted(data, key=lambda x: -x['score']) if s['score'] >= 40][:5]
-print(','.join(candidates) if candidates else 'NONE')
-" 2>/dev/null)
+          TOP_STOCKS=$(python3 -c "import json;d=json.load(open('minervini_results.json'));c=[s['symbol'] for s in sorted(d,key=lambda x:-x['score']) if s['score']>=40][:5];print(','.join(c) if c else 'NONE')" 2>/dev/null)
 
           if [[ "$TOP_STOCKS" == "NONE" || -z "$TOP_STOCKS" ]]; then
             echo "没有评分≥40的候选股，跳过深度分析"
@@ -115,7 +108,6 @@ print(','.join(candidates) if candidates else 'NONE')
           echo "TOP候选股: $TOP_STOCKS"
           echo ""
 
-          # 触发分析工作流
           # 触发分析工作流
           # 注意: 如果触发失败，需要在 Secrets 中添加 GH_PAT (Personal Access Token)
           gh workflow run analyze.yml \
