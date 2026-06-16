@@ -40,59 +40,10 @@ def _get_manager():
     global _manager
     if _manager is not None:
         return _manager
-    try:
-        from data_provider.base import DataFetcherManager
-        from data_provider.yfinance_fetcher import YfinanceFetcher
-        _manager = DataFetcherManager([YfinanceFetcher()])
-    except ImportError:
-        _manager = _YfinanceFallback()
+    from data_provider.base import DataFetcherManager
+    from data_provider.yfinance_fetcher import YfinanceFetcher
+    _manager = DataFetcherManager([YfinanceFetcher()])
     return _manager
-
-
-class _YfinanceFallback:
-    import yfinance as _yf
-
-    def get_realtime_quote(self, code):
-        try:
-            tk = self._yf.Ticker(code)
-            info = tk.info if hasattr(tk, 'info') else {}
-            hist = tk.history(period='5d')
-            if hist is None or len(hist) == 0:
-                return None
-            price = float(info.get('currentPrice') or info.get('regularMarketPrice') or hist['Close'].iloc[-1])
-            class _Q: pass
-            q = _Q()
-            q.code = code
-            q.name = info.get('shortName') or info.get('longName') or code
-            q.price = price
-            q.change_pct = float(hist['Close'].pct_change().iloc[-1] * 100) if len(hist) > 1 else 0
-            q.change_amount = float(hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) if len(hist) > 1 else 0
-            q.open_price = float(hist['Open'].iloc[-1]) if 'Open' in hist else price
-            q.high = float(hist['High'].iloc[-1]) if 'High' in hist else price
-            q.low = float(hist['Low'].iloc[-1]) if 'Low' in hist else price
-            q.pre_close = float(hist['Close'].iloc[-2]) if len(hist) > 1 else price
-            q.volume = int(hist['Volume'].iloc[-1]) if 'Volume' in hist else 0
-            q.amplitude = float((q.high - q.low) / q.price * 100)
-            q.total_mv = float(info.get('marketCap', 0) or 0)
-            return q
-        except Exception:
-            return None
-
-    def get_daily_data(self, code, days=60):
-        try:
-            tk = self._yf.Ticker(code)
-            df = tk.history(period='6mo')
-            if df is None or len(df) == 0:
-                return None, 'yfinance'
-            df = df.tail(days).copy()
-            df.index.name = 'date'
-            df = df.reset_index()
-            df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-            if 'close' in df.columns:
-                df['pct_chg'] = df['close'].pct_change() * 100
-            return df, 'yfinance_fallback'
-        except Exception:
-            return None, 'yfinance_fallback'
 
 def _get_trend_analyzer():
     global _analyzer
@@ -1115,6 +1066,79 @@ def compare_stocks(codes: List[str]) -> str:
 
 
 # ══════════════════════════════════════════════
+# mktml ML 模型集成接口
+# ══════════════════════════════════════════════
+
+MKTML_DB = os.path.join(PROJECT_ROOT, "..", "mktml", "data", "market_data.duckdb")
+
+
+def get_ml_predictions(code: str = None) -> Optional[List[Dict]]:
+    """
+    从 mktml ML 模型获取机器学习预测信号
+
+    参数:
+        code: 股票代码（None=返回所有持仓预测）
+
+    返回:
+        [{"ticker":"SOFI","horizon":5,"signal":"HOLD","confidence":0.606,...}, ...]
+    """
+    try:
+        import duckdb
+        db_path = os.path.abspath(MKTML_DB)
+        if not os.path.exists(db_path):
+            return None
+
+        con = duckdb.connect(str(db_path))
+        max_date = con.execute("SELECT MAX(asof_date) FROM model_predictions").fetchone()[0]
+
+        if code:
+            rows = con.execute("""
+                SELECT ticker, horizon, signal_type, proba_cal, score
+                FROM model_predictions
+                WHERE ticker=? AND asof_date=?
+                ORDER BY horizon
+            """, [code.upper(), max_date]).fetchall()
+        else:
+            rows = con.execute("""
+                SELECT ticker, horizon, signal_type, proba_cal, score
+                FROM model_predictions
+                WHERE asof_date=?
+                ORDER BY ticker, horizon
+            """, [max_date]).fetchall()
+
+        con.close()
+        return [{
+            "ticker": r[0], "horizon": r[1],
+            "signal": r[2], "confidence": round(r[3], 3),
+            "score": round(r[4], 2),
+        } for r in rows]
+    except Exception:
+        return None
+
+
+def format_ml_report(codes: List[str] = None) -> str:
+    """格式化ML模型预测报告"""
+    preds = get_ml_predictions()
+    if not preds:
+        return "ML模型尚未训练完成"
+
+    lines = ["【mktml ML 模型信号】"]
+    tickers = set(p['ticker'] for p in preds)
+
+    for ticker in sorted(tickers):
+        if codes and ticker not in codes:
+            continue
+        tp = [p for p in preds if p['ticker'] == ticker]
+        sigs = " | ".join([
+            f"{p['horizon']}d:{p['signal']}({p['confidence']:.0%})" for p in sorted(tp, key=lambda x: x['horizon'])
+        ])
+        lines.append(f"  {ticker:<6}: {sigs}")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════
 # CLI 入口
 # ══════════════════════════════════════════════
 
@@ -1130,11 +1154,15 @@ if __name__ == "__main__":
     parser.add_argument("--daily", type=str, help="每日报告（逗号分隔代码）")
     parser.add_argument("--compare", type=str, help="多股对比（逗号分隔代码）")
     parser.add_argument("--list-strategies", action="store_true", help="列出所有策略")
+    parser.add_argument("--ml", type=str, nargs="?", const="ALL", metavar="CODE", help="获取ML模型预测")
     parser.add_argument("--json", action="store_true", help="JSON格式输出")
     args = parser.parse_args()
 
     if args.list_strategies:
         print(format_strategy_list())
+    elif args.ml:
+        result = get_ml_predictions(code=None if args.ml == "ALL" else args.ml)
+        print(json.dumps(result, ensure_ascii=False, default=str) if args.json else (format_ml_report([args.ml]) if args.ml != "ALL" else format_ml_report()))
     elif args.quote:
         result = get_quote(args.quote)
         print(json.dumps(result, ensure_ascii=False, default=str) if args.json else json.dumps(result, ensure_ascii=False, indent=2, default=str))

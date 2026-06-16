@@ -79,6 +79,26 @@ def format_telegram_report(stocks):
     # 引擎2+3: 每只候选股分析
     lines.append("┌─ 引擎2+3: 策略匹配 + AI决策 ─────────────┐")
     lines.append("")
+
+    # ML 模型信号
+    try:
+        import subprocess, json
+        r = subprocess.run([sys.executable, "stock_engine.py", "--json", "--ml", "ALL"], capture_output=True, text=True, cwd=PROJECT, timeout=15)
+        if r.stdout and r.stdout.strip():
+            ml = json.loads(r.stdout)
+            if ml:
+                lines.append("【ML模型预测】")
+                seen = set()
+                for p in sorted(ml, key=lambda x: (x['ticker'], x['horizon'])):
+                    if p['ticker'] not in seen:
+                        seen.add(p['ticker'])
+                        tp = [x for x in ml if x['ticker'] == p['ticker']]
+                        sigs = " ".join(["%dd:%s(%.0f%%)" % (x['horizon'], x['signal'], x['confidence']*100) for x in sorted(tp, key=lambda y: y['horizon'])])
+                        lines.append("  %s: %s" % (p['ticker'], sigs))
+                lines.append("")
+    except:
+        pass
+
     lines.append("%-6s %-6s %-8s %-8s %-6s %-16s %s" % ("股票", "评分", "趋势", "信号", "RSI", "最佳策略", "建议"))
     lines.append("-" * 80)
 
