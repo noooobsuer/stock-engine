@@ -1,18 +1,7 @@
-# ===========================================
-# mktml — ML美股每日信号扫描
-# ===========================================
-# 基于集成学习(RF+GBM+XGBoost)的美股BUY/HOLD/SELL信号
-# 覆盖900+标的，5d/10d/30d三个时间维度
-#
-# 配置 (Settings → Secrets → Actions):
-#   FRED_API_KEY  https://fred.stlouisfed.org/docs/api/api_key.html (免费)
-# ===========================================
-
 name: mktml 每日信号
 
 on:
   schedule:
-    # 工作日 19:00 JST (10:00 UTC) — 美股盘前
     - cron: '0 10 * * 1-5'
   workflow_dispatch:
 
@@ -22,73 +11,34 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
 
-      - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install scikit-learn xgboost pandas numpy yfinance duckdb plotly matplotlib requests beautifulsoup4 lxml
+      - name: Install
+        run: pip install scikit-learn xgboost pandas numpy yfinance duckdb plotly matplotlib requests beautifulsoup4 lxml
 
-      - name: 配置 mktml
+      - name: Setup
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
-          # 克隆mktml
           git clone --depth 1 https://github.com/smkwray/mktml.git /tmp/mktml
-          cp -r /tmp/mktml/src /tmp/mktml/config.py .
+          echo "FRED key ok: ${FRED_API_KEY:0:8}..."
 
-          # 配置
-          cat > config_mktml.py << 'CONFIGEOF'
-import os
-PROJECT_ROOT = "."
-DATA_DIR = "data"
-REPORT_DIR = "reports"
-HORIZONS = [5, 10, 30]
-HISTORY_YEARS = 3
-N_JOBS = 2
-FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
-ENABLE_XGBOOST = True
-ML_MODE = "FAST"
-TOP_PICKS = 10
-DEFAULT_BUY_THRESHOLD = 0.6
-DEFAULT_SELL_THRESHOLD = 0.4
-CONFIGEOF
+      - name: Init
+        run: cd /tmp/mktml && python src/main.py --init-db 2>&1 | tail -3 || true
 
-      - name: 初始化数据库
-        run: |
-          echo "初始化mktml数据库..."
-          python /tmp/mktml/src/main.py --init-db 2>&1 | tail -5 || true
-
-      - name: 🔍 运行每日扫描
+      - name: Scan
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-        run: |
-          echo "=== mktml 每日信号扫描 ==="
-          python /tmp/mktml/src/main.py --scan 2>&1 | tail -30
-          echo ""
-          echo "=== 结果 ==="
-          ls -la reports/ 2>/dev/null || echo "(首次运行需先训练)"
+        run: cd /tmp/mktml && python src/main.py --scan 2>&1 | tail -20
 
-      - name: 📤 推送到 Telegram
+      - name: Notify
         if: secrets.TELEGRAM_BOT_TOKEN != ''
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # 发送运行状态
-          MSG="🤖 mktml 每日信号扫描%0A"
-          MSG+="状态: 已完成 (首次运行约2小时, 后续每天约10分钟)%0A%0A"
-          MSG+="📌 首次需先在本地完成模型训练:%0A"
-          MSG+="  cd /f/mktml && .venv/Scripts/python src/main.py --pipeline full%0A%0A"
-          MSG+="📌 后续每日:%0A"
-          MSG+="  cd /f/mktml && .venv/Scripts/python src/main.py --scan"
-          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "text=${MSG}" || true
+          MSG="mktml scan done.%0AFirst-time local training: cd /f/mktml && .venv/Scripts/python src/main.py --pipeline full"
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${CHAT_ID}&text=${MSG}" || true
