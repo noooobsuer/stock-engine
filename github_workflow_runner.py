@@ -103,15 +103,15 @@ def format_telegram_report(stocks):
     lines.append("-" * 80)
 
     for sym in stocks[:8]:
-        trend = trend_analysis(sym)
-        tech = tech_analysis(sym)
-        ev = strategy_eval(sym)
-        mr = minervini_single(sym)
+        trend = trend_analysis(sym) or {}
+        tech = tech_analysis(sym) or {}
+        ev = strategy_eval(sym) or []
+        mr = minervini_single(sym) or {}
 
         score = str(trend.get('signal_score', '-'))
-        t = trend.get('trend_status', tech.get('trend', ''))[:6]
-        sig = trend.get('buy_signal', '')[:6]
-        rsi = str(trend.get('rsi_6', tech.get('rsi_14', '')))
+        t = (trend.get('trend_status') or tech.get('trend', ''))[:6]
+        sig = (trend.get('buy_signal') or '')[:6]
+        rsi = str(trend.get('rsi_6') or tech.get('rsi_14', ''))
         sname = ev[0].get('display_name', '-')[:14] if ev else '-'
         ms = str(mr.get('score', '')) if mr.get('score',0) > 0 else '-'
 
@@ -126,13 +126,17 @@ def format_telegram_report(stocks):
 
     lines.append("")
     lines.append("┌─ 操作建议 ───────────────────────────────┐")
-    buy = [s for s in stocks[:8] if trend_analysis(s).get('buy_signal','') in ['买入','强烈买入','持有']]
-    for s in buy[:3]:
-        lines.append("  ✅ %s: 评分%s, 多头排列" % (s, trend_analysis(s).get('signal_score','')))
+    buy_stocks = []
     for s in stocks[:8]:
-        t = trend_analysis(s)
-        if t.get('buy_signal','') in ['观望','卖出','强烈卖出']:
-            lines.append("  ⏳ %s: 评分%s, 等待信号" % (s, t.get('signal_score','')))
+        tr = trend_analysis(s) or {}
+        if tr.get('buy_signal') in ['买入','强烈买入','持有']:
+            buy_stocks.append((s, tr.get('signal_score','')))
+    for s, sc in buy_stocks[:3]:
+        lines.append("  ✅ %s: 评分%s, 多头排列" % (s, sc))
+    for s in stocks[:8]:
+        tr = trend_analysis(s) or {}
+        if tr.get('buy_signal') in ['观望','卖出','强烈卖出']:
+            lines.append("  ⏳ %s: 评分%s, 等待信号" % (s, tr.get('signal_score','')))
 
     lines.append("")
     lines.append("---")
